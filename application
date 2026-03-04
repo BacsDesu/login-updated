@@ -1,0 +1,134 @@
+<?php
+// applications.php - User portal to view and access application forms
+session_start();
+
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    header('Location: index.php');
+    exit;
+}
+
+$host   = 'localhost';
+$dbname = 'login_system';
+$dbuser = 'root';
+$dbpass = '';
+
+$user_id = (int)($_SESSION['user_id'] ?? 0);
+$available_forms = [];
+$my_applications = [];
+
+try {
+    $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $dbuser, $dbpass);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+    // Get available forms
+    $stmt = $pdo->prepare("
+        SELECT ft.*, COUNT(fs.id) as submission_count 
+        FROM form_templates ft 
+        LEFT JOIN form_submissions fs ON ft.id = fs.form_id AND fs.user_id = ?
+        WHERE ft.is_active = 1 AND (ft.deadline IS NULL OR ft.deadline >= CURDATE())
+        GROUP BY ft.id
+        ORDER BY ft.created_at DESC
+    ");
+    $stmt->execute([$user_id]);
+    $available_forms = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Get user's existing applications
+    $stmt = $pdo->prepare("
+        SELECT fs.*, ft.title as form_title, ft.event_target
+        FROM form_submissions fs
+        JOIN form_templates ft ON fs.form_id = ft.id
+        WHERE fs.user_id = ?
+        ORDER BY fs.submitted_at DESC
+    ");
+    $stmt->execute([$user_id]);
+    $my_applications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+} catch (PDOException $e) {
+    error_log('Applications page error: ' . $e->getMessage());
+    $error = 'Database error occurred.';
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Applications - NISU SmartPOP</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="page-wrap">
+        <header class="app-header">
+            <h1>Available Applications</h1>
+            <a href="dashboard.php" class="back-btn">← Back to Dashboard</a>
+        </header>
+
+        <?php if (!empty($error)): ?>
+            <div class="alert error"><?= htmlspecialchars($error) ?></div>
+        <?php endif; ?>
+
+        <!-- Available Forms Section -->
+        <section class="forms-section">
+            <h2>Open Applications</h2>
+            <div class="forms-grid">
+                <?php foreach ($available_forms as $form): ?>
+                    <?php 
+                    $has_submission = $form['submission_count'] > 0;
+                    $deadline_passed = $form['deadline'] && strtotime($form['deadline']) < time();
+                    ?>
+                    <div class="form-card <?= $has_submission ? 'submitted' : '' ?>">
+                        <h3><?= htmlspecialchars($form['title']) ?></h3>
+                        <p class="form-event"><?= htmlspecialchars($form['event_target'] ?? 'General Application') ?></p>
+                        <?php if ($form['deadline']): ?>
+                            <p class="form-deadline">Deadline: <?= date('M j, Y', strtotime($form['deadline'])) ?></p>
+                        <?php endif; ?>
+                        
+                        <?php if ($has_submission): ?>
+                            <div class="form-status submitted">Already Applied</div>
+                            <a href="application.php?form=<?= $form['id'] ?>" class="btn secondary">View Application</a>
+                        <?php elseif ($deadline_passed): ?>
+                            <div class="form-status closed">Closed</div>
+                        <?php else: ?>
+                            <a href="application.php?form=<?= $form['id'] ?>" class="btn primary">Apply Now</a>
+                        <?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+                
+                <?php if (empty($available_forms)): ?>
+                    <div class="empty-state">
+                        <p>No application forms are currently available.</p>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </section>
+
+        <!-- My Applications Section -->
+        <section class="my-applications">
+            <h2>My Applications</h2>
+            <div class="applications-list">
+                <?php foreach ($my_applications as $app): ?>
+                    <div class="application-item status-<?= strtolower($app['status']) ?>">
+                        <div class="app-info">
+                            <h4><?= htmlspecialchars($app['form_title']) ?></h4>
+                            <p class="app-event"><?= htmlspecialchars($app['event_target'] ?? 'General') ?></p>
+                            <p class="app-date">Submitted: <?= date('M j, Y', strtotime($app['submitted_at'])) ?></p>
+                        </div>
+                        <div class="app-status">
+                            <span class="status-badge"><?= $app['status'] ?></span>
+                            <?php if ($app['reviewer_notes']): ?>
+                                <p class="reviewer-notes">Notes: <?= htmlspecialchars($app['reviewer_notes']) ?></p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+                
+                <?php if (empty($my_applications)): ?>
+                    <div class="empty-state">
+                        <p>You haven't submitted any applications yet.</p>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </section>
+    </div>
+</body>
+</html>
